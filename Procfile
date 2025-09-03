@@ -1,1 +1,1 @@
-worker: python -m app.sync.run_status_type_sync.py
+worker: python -m app.sync.run_status_type_sync
