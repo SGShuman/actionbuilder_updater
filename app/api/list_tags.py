@@ -1,3 +1,4 @@
+from time import sleep
 from typing import Any, Dict, Generator, List
 
 import requests
@@ -8,7 +9,7 @@ from app.services.utils import retry_request
 BASE_URL = f"https://{CONFIG.domain}.actionbuilder.org/api/rest/v1/campaigns/{CONFIG.campaign_id}/people/"
 HEADERS = {"OSDI-API-Token": CONFIG.api_key, "Content-Type": "application/json"}
 
-@retry_request()
+
 def _fetch_tag_page(person_id: str, page: int, per_page: int) -> Dict[str, Any]:
     """Fetch a single page of taggings for a person."""
     url = f"{BASE_URL}{person_id}/taggings"
@@ -18,6 +19,7 @@ def _fetch_tag_page(person_id: str, page: int, per_page: int) -> Dict[str, Any]:
     return r.json()
 
 
+# @retry_request()
 def get_tags_paginated(
     person_id: str, per_page: int = 25
 ) -> Generator[Dict[str, Any], None, None]:
@@ -27,6 +29,7 @@ def get_tags_paginated(
     page = 1
     while True:
         try:
+            sleep(0.5)
             data = _fetch_tag_page(person_id, page, per_page)
         except requests.RequestException as e:
             print(f"Error fetching page {page} for person {person_id}: {e}")

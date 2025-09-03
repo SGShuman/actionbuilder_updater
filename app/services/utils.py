@@ -30,10 +30,9 @@ def run_today(today: int) -> bool:
 
 
 def retry_request(
-    max_attempts=3,
-    backoff=1,
+    max_attempts=2,
+    backoff=2,
     exceptions=(requests.RequestException,),
-    retry_if_false=False,
 ):
     def decorator(func):
         @wraps(func)
@@ -46,14 +45,9 @@ def retry_request(
             for attempt in range(1, max_attempts + 1):
                 try:
                     result = func(*args, **kwargs)
-                    if retry_if_false and (result is False or result is None):
-                        if attempt == max_attempts:
-                            return result
-                        else:
-                            raise ValueError("Function returned False/None, retrying")
                     return result
 
-                except exception_types + ((ValueError,) if retry_if_false else ()):
+                except exception_types:
                     if attempt == max_attempts:
                         raise
 

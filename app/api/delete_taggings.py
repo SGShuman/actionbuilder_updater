@@ -7,7 +7,7 @@ BASE_URL = f"https://{CONFIG.domain}.actionbuilder.org/api/rest/v1/campaigns/{CO
 HEADERS = {"OSDI-API-Token": CONFIG.api_key, "Content-Type": "application/json"}
 
 
-@retry_request(retry_if_false=True)
+@retry_request()
 def delete_tagging(person_id: str, tagging_id: str) -> bool:
     """
     Delete a tagging for a given person.
@@ -15,18 +15,16 @@ def delete_tagging(person_id: str, tagging_id: str) -> bool:
     Returns True if deletion was successful, False otherwise.
     """
     url = f"{BASE_URL}{person_id}/taggings/{tagging_id}"
-    try:
-        r = requests.delete(url, headers=HEADERS)
-        if r.status_code in {200, 204}:  # No Content = successful deletion
-            return True
-        else:
-            print(
-                f"Failed to delete tagging {tagging_id} for person {person_id}: {r.status_code} {r.text}"
-            )
-            return False
-    except requests.RequestException as e:
-        print(f"Error deleting tagging {tagging_id} for person {person_id}: {e}")
+    r = requests.delete(url, headers=HEADERS)
+    
+    if r.status_code in {200, 204}:
+        return True
+    elif r.status_code == 404:
+        # Tagging not found — treat as "already deleted"
         return False
+    else:
+        # Let other HTTP errors trigger retry
+        r.raise_for_status()
 
 
 if __name__ == "__main__":

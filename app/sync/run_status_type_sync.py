@@ -1,7 +1,7 @@
 """
 Action Builder Membership Synchronization Script - Parallel Version
 
-This module synchronizes membership status and type information between Action Builder
+This module synchronizes membership unit name and type information between Action Builder
 and unit-based organizational data. It identifies people whose membership information
 has changed, generates reports, and cleans up outdated tags.
 
@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.api.delete_taggings import delete_tagging
 from app.api.fetch_people import (
+    fetch_connection_status_from_connections,
     fetch_connections_from_person,
     fetch_taggings_from_connection,
     fetch_unit_from_connection,
@@ -47,13 +48,13 @@ logger = logging.getLogger()
 
 @dataclass
 class PersonUnitInfo:
-    """Information about a person's unit membership status and type."""
+    """Information about a person's unit, membership status and type."""
 
     uuid: str
     unit_name: str
-    membership_status_tag_id: str
+    membership_unit_name_tag_id: str
     membership_type_tag_id: str
-    membership_status: str
+    membership_unit_name: str
     membership_type: str
     inactive: bool
 
@@ -73,9 +74,9 @@ def dict_to_csv(data: Dict[str, PersonUnitInfo]) -> tuple[str, int]:
         Returns empty string if no data provided or no active records found.
 
     Excluded fields:
-        - membership_status_tag_id
+        - membership_unit_name_tag_id
         - membership_type_tag_id
-        - membership_status
+        - membership_unit_name
         - inactive
     """
     if not data:
@@ -85,9 +86,9 @@ def dict_to_csv(data: Dict[str, PersonUnitInfo]) -> tuple[str, int]:
 
     # Exclude unwanted fields
     exclude_fields = {
-        "membership_status_tag_id",
+        "membership_unit_name_tag_id",
         "membership_type_tag_id",
-        "membership_status",
+        "membership_unit_name",
         "inactive",
     }
     active_rows = [row for row in rows if not row.get("inactive", False)]
@@ -108,10 +109,10 @@ def dict_to_csv(data: Dict[str, PersonUnitInfo]) -> tuple[str, int]:
 
 def get_person_current_tags(person_id: str) -> Dict[str, Dict[str, str]]:
     """
-    Fetch current Membership Status and Type tags for a person.
+    Fetch current Membership Bargaining Unit and Type tags for a person.
 
     Returns:
-        Dict with 'status' and 'type' keys, each containing 'tag_id' and 'tag_name'
+        Dict with 'unit_name' and 'type' keys, each containing 'tag_id' and 'tag_name'
     """
     current_tags = {}
 
@@ -124,8 +125,8 @@ def get_person_current_tags(person_id: str) -> Dict[str, Dict[str, str]]:
         if tagging.get("identifiers"):
             tag_id = tagging["identifiers"][0].split(":")[-1]
 
-        if field_name == "Membership Status":
-            current_tags["status"] = {"tag_id": tag_id, "tag_name": tag_name or ""}
+        if field_name == "Bargaining Unit":
+            current_tags["unit_name"] = {"tag_id": tag_id, "tag_name": tag_name or ""}
         elif field_name == "Membership Type":
             current_tags["type"] = {"tag_id": tag_id, "tag_name": tag_name or ""}
 
@@ -134,12 +135,12 @@ def get_person_current_tags(person_id: str) -> Dict[str, Dict[str, str]]:
 
 def extract_connection_membership_info(taggings: list) -> tuple:
     """
-    Extract membership status and type information from connection taggings.
+    Extract membership type information from connection taggings.
 
     Returns:
-        Tuple of (status_value, status_id, type_value, type_id)
+        Tuple of (type_value, type_id)
     """
-    status_value = status_id = type_value = type_id = None
+    type_value = type_id = None
 
     for tagging in taggings:
         field_name = tagging.get("action_builder:field")
@@ -150,14 +151,11 @@ def extract_connection_membership_info(taggings: list) -> tuple:
         if tagging.get("identifiers"):
             tag_id = tagging["identifiers"][0].split(":")[-1]
 
-        if field_name == "Membership Status":
-            status_value = tag_value
-            status_id = tag_id
-        elif field_name == "Membership Type":
+        if field_name == "Membership Type":
             type_value = tag_value
             type_id = tag_id
 
-    return status_value, status_id, type_value, type_id
+    return type_value, type_id
 
 
 def process_person(person: dict, verbose: bool = True) -> Optional[PersonUnitInfo]:
@@ -166,6 +164,9 @@ def process_person(person: dict, verbose: bool = True) -> Optional[PersonUnitInf
     Returns None if any API call fails or no differences found.
     """
     try:
+        if person.get("action_builder:entity_type") != "Person":
+            logger.info("Entity not a person, skipping")
+            return None
         person_id_full = person.get("identifiers", [None])[0]
         if not person_id_full:
             logger.warning("Person missing UUID, skipping")
@@ -174,60 +175,58 @@ def process_person(person: dict, verbose: bool = True) -> Optional[PersonUnitInf
         person_uuid = person_id_full.split(":")[-1]
 
         person_data = get_person(person_uuid)
-        sleep(0.2)  # Increased sleep for conservative API usage
+        sleep(0.2)
         if not person_data:
             logger.warning(f"Could not fetch data for person {person_uuid}")
             return None
         browser_url = person_data.get("browser_url", "URL")
 
         connections = fetch_connections_from_person(person_data)
-        sleep(0.2)  # Increased sleep for conservative API usage
+        connection_status = fetch_connection_status_from_connections(connections)
+        sleep(0.2)
         if not connections:
             logger.warning(f"No connections for person {person_uuid}")
-            return None
 
         unit_data = fetch_unit_from_connection(connections)
-        sleep(0.2)  # Increased sleep for conservative API usage
+        sleep(0.2)
         unit_name = (
             unit_data.get("action_builder:name", "Unknown Unit")
             if unit_data
             else "Unknown Unit"
         )
         taggings = fetch_taggings_from_connection(connections)
-        sleep(0.2)  # Increased sleep for conservative API usage
-        status_value, status_id, type_value, type_id = (
-            extract_connection_membership_info(taggings)
-        )
+        sleep(0.2)
+        type_value, type_id = extract_connection_membership_info(taggings)
 
-        if (type_value == "Non-Member") and (status_id is None):
-            logger.info(
-                f"Non Member, {person_uuid}, {unit_name}, {status_value}, {type_value}\n{browser_url}"
-            )
-        elif not (status_id and type_id):
+        # if type_value == "Non-Member":
+        #     logger.info(
+        #         f"Non Member, {person_uuid}, {unit_name}, {connection_status}, {type_value}\n{browser_url}"
+        #     )
+        if not type_id:
             logger.warning(
-                f"Missing membership info for person {person_uuid}, {unit_name}, {status_value}, {type_value}\n{person_data.get('browser_url', 'URL')}"
+                f"Missing membership info for person {person_uuid}, {unit_name}, {connection_status}, {type_value}\n{person_data.get('browser_url', 'URL')}"
             )
-            # include return None here to prevent these taggings from being deleted from the person
-            # With or without return None the tagging will not make it to the csv
 
         current_tags = get_person_current_tags(person_uuid)
-        sleep(0.2)  # Increased sleep for conservative API usage
-        current_status = current_tags.get("status", {}).get("tag_name")
+        sleep(0.2)
+        current_unit_name = current_tags.get("unit_name", {}).get("tag_name")
         current_type = current_tags.get("type", {}).get("tag_name")
         if verbose:
             logger.info(
-                f"unit connection:person status;type {unit_name} {status_value}:{current_status}; {type_value}:{current_type}\n{browser_url}"
+                f"connection:person status unit;type {unit_name}:{current_unit_name} {connection_status} {type_value}:{current_type}\n{browser_url}"
             )
 
-        if status_value != current_status or type_value != current_type:
+        if unit_name != current_unit_name or type_value != current_type:
             return PersonUnitInfo(
                 uuid=person_uuid,
                 unit_name=unit_name,
-                membership_status_tag_id=current_tags.get("status", {}).get("tag_id"),
+                membership_unit_name_tag_id=current_tags.get("unit_name", {}).get(
+                    "tag_id"
+                ),
                 membership_type_tag_id=current_tags.get("type", {}).get("tag_id"),
-                membership_status=status_value or "",
+                membership_unit_name=current_unit_name or "",
                 membership_type=type_value or "",
-                inactive=status_value != "Active",
+                inactive=not connection_status,
             )
         return None
 
@@ -372,7 +371,7 @@ def delete_tag_for_person(person_id: str, tag_id: str, tag_type: str) -> bool:
     Args:
         person_id: The person's UUID
         tag_id: The tag ID to delete
-        tag_type: Type description for logging (e.g., 'status', 'type')
+        tag_type: Type description for logging (e.g., 'unit_name', 'type')
 
     Returns:
         True if successful, False otherwise
@@ -399,8 +398,10 @@ def delete_outdated_tags(
     # Collect all deletion tasks
     deletion_tasks = []
     for person_id, info in people_map.items():
-        if info.membership_status_tag_id:
-            deletion_tasks.append((person_id, info.membership_status_tag_id, "status"))
+        if info.membership_unit_name_tag_id:
+            deletion_tasks.append(
+                (person_id, info.membership_unit_name_tag_id, "unit_name")
+            )
         if info.membership_type_tag_id:
             deletion_tasks.append((person_id, info.membership_type_tag_id, "type"))
 
@@ -457,7 +458,7 @@ def main(scheduled: bool = True, max_workers: int = 4, batch_size: int = 10) -> 
         max_workers: Maximum number of parallel worker threads
         batch_size: Number of people to process in each batch
     """
-    if not run_today(1) and scheduled:  # Only run on the first of the month
+    if not run_today(20) and scheduled:  # Only run on the first of the month
         return
 
     # Build map of people with membership differences
@@ -478,7 +479,7 @@ def main(scheduled: bool = True, max_workers: int = 4, batch_size: int = 10) -> 
 
     # Generate and send CSV report
     csv_content, row_count = dict_to_csv(people_map)
-    # save_csv_to_file(csv_content)  # for testing
+    save_csv_to_file(csv_content)  # for testing
     if csv_content:
         subj = f"WBNG ActionBuilder API Sync ran, {row_count} rows attached"
         send_email(subject=subj, csv_content=csv_content)
@@ -493,4 +494,4 @@ def main(scheduled: bool = True, max_workers: int = 4, batch_size: int = 10) -> 
 
 if __name__ == "__main__":
     # Conservative settings for API usage
-    main(scheduled=True, max_workers=1, batch_size=1)
+    main(scheduled=False, max_workers=1, batch_size=1)
