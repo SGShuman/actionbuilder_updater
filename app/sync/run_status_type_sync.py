@@ -494,4 +494,4 @@ def main(scheduled: bool = True, max_workers: int = 4, batch_size: int = 10) -> 
 
 if __name__ == "__main__":
     # Conservative settings for API usage
-    main(scheduled=False, max_workers=1, batch_size=1)
+    main(scheduled=True, max_workers=1, batch_size=1)
